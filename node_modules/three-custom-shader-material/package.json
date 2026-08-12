@@ -1,0 +1,60 @@
+{
+  "name": "three-custom-shader-material",
+  "description": "Extend Three.js standard materials with your own shaders!",
+  "private": false,
+  "version": "6.4.0",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "./**/*"
+  ],
+  "homepage": "https://github.com/FarazzShaikh/THREE-CustomShaderMaterial",
+  "main": "three-custom-shader-material.cjs.js",
+  "module": "three-custom-shader-material.es.js",
+  "types": "react.d.ts",
+  "exports": {
+    ".": {
+      "import": "./three-custom-shader-material.es.js",
+      "require": "./three-custom-shader-material.cjs.js",
+      "types": "./react.d.ts"
+    },
+    "./vanilla": {
+      "import": "./vanilla/three-custom-shader-material.es.js",
+      "require": "./vanilla/three-custom-shader-material.cjs.js",
+      "types": "./vanilla/vanilla.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc && vite build && cp ./package.json ./dist/package.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.2",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@types/three": "^0.172.0",
+    "@typescript-eslint/eslint-plugin": "^7.2.0",
+    "@typescript-eslint/parser": "^7.2.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.6",
+    "typescript": "^5.2.2",
+    "vite": "^5.2.0",
+    "vite-plugin-dts": "^3.8.1"
+  },
+  "peerDependencies": {
+    "@react-three/fiber": ">=8.0",
+    "react": ">=18.0",
+    "three": ">=0.159"
+  },
+  "peerDependenciesMeta": {
+    "@react-three/fiber": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {}
+}

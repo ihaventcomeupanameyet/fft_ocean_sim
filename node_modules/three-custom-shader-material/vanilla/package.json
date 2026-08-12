@@ -1,0 +1,6 @@
+{
+  "main": "three-custom-shader-material.cjs.js",
+  "module": "three-custom-shader-material.es.js",
+  "type": "module",
+  "types": "vanilla.d.ts"
+}
