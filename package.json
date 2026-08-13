@@ -11,11 +11,12 @@
   "dependencies": {
     "@react-three/drei": "latest",
     "@react-three/fiber": "latest",
+    "leva": "^0.10.1",
+    "react": "latest",
+    "react-dom": "latest",
     "three": "latest",
     "three-custom-shader-material": "latest",
-    "vite": "^5.4.14",
-    "react": "latest",
-    "react-dom": "latest"
+    "vite": "^5.4.14"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4"

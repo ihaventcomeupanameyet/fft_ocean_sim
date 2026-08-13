@@ -134,13 +134,37 @@ void main() {
 `
 
 export class GPUOceanSimulation {
-  constructor(renderer, { size = 64, patchLength = 128, windSpeed = 18, seed = 1701 } = {}) {
+  constructor(renderer, {
+    size = 64,
+    patchLength = 128,
+    windSpeed = 18,
+    fetchKm = 100,
+    peakEnhancement = 6,
+    spreadBlend = 0.85,
+    swell = 0.2,
+    shortWaveDampingLength = 0.35,
+    minWavelength = 0,
+    maxWavelength = Infinity,
+    spectrumScale = 1,
+    seed = 1701,
+  } = {}) {
     this.size = size
     this.patchLength = patchLength
     this.logSize = Math.log2(size)
     this.gpuCompute = new GPUComputationRenderer(size, size, renderer)
     this.gpuCompute.setDataType(THREE.FloatType)
-    this.h0Texture = this.createInitialSpectrum(windSpeed, seed)
+    this.h0Texture = this.createInitialSpectrum({
+      windSpeed,
+      fetchKm,
+      peakEnhancement,
+      spreadBlend,
+      swell,
+      shortWaveDampingLength,
+      minWavelength,
+      maxWavelength,
+      spectrumScale,
+      seed,
+    })
     const initialSpectrum = this.gpuCompute.createTexture()
     this.spectrumVariable = this.gpuCompute.addVariable('textureSpectrum', evolutionShader, initialSpectrum)
     Object.assign(this.spectrumVariable.material.uniforms, {
@@ -171,16 +195,23 @@ export class GPUOceanSimulation {
       THREE.RepeatWrapping, filter, filter)
   }
 
-  createInitialSpectrum(windSpeed, seed) {
+  createInitialSpectrum({
+    windSpeed,
+    fetchKm,
+    peakEnhancement,
+    spreadBlend,
+    swell,
+    shortWaveDampingLength,
+    minWavelength,
+    maxWavelength,
+    spectrumScale,
+    seed,
+  }) {
     const texture = this.gpuCompute.createTexture()
     const data = texture.image.data
     const gaussian = createGaussian(seed)
     const wind = new THREE.Vector2(0.94, 0.342).normalize()
     const windAngle = Math.atan2(wind.y, wind.x)
-    const fetchKm = 100
-    const peakEnhancement = 6.0
-    const spreadBlend = 0.85
-    const swell = 0.2
     const deltaK = Math.PI * 2 / this.patchLength
     const spectralBinArea = deltaK * deltaK
     const half = this.size / 2
@@ -193,7 +224,8 @@ export class GPUOceanSimulation {
       const offset = (z*this.size + x)*4
       if (k2 === 0) continue
       const k = Math.sqrt(k2)
-      const shortWaveDampingLength = 0.35
+      const wavelength = Math.PI * 2 / k
+      if (wavelength < minWavelength || wavelength > maxWavelength) continue
       const omega = Math.sqrt(GRAVITY*k)
       const { density: frequencyDensity, peakOmega } = jonswapSpectrum(
         omega, windSpeed, fetchKm, peakEnhancement,
@@ -206,7 +238,7 @@ export class GPUOceanSimulation {
       const spectrumDensity = 2*frequencyDensity*Math.abs(frequencyDerivative)/k
         * directional
         * Math.exp(-k2*shortWaveDampingLength*shortWaveDampingLength)
-      const varianceInBin = spectrumDensity * spectralBinArea
+      const varianceInBin = spectrumDensity * spectralBinArea * spectrumScale
       const scale = Math.sqrt(Math.max(varianceInBin, 0)*0.5)
       data[offset] = gaussian()*scale
       data[offset + 1] = gaussian()*scale

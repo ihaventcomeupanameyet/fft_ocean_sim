@@ -38,7 +38,7 @@ export function OceanScene() {
         makeDefault
         target={[0, 0, 0]}
         minDistance={8}
-        maxDistance={350}
+        maxDistance={1400}
         maxPolarAngle={Math.PI * 0.485}
         enableDamping
         dampingFactor={0.06}
