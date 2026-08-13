@@ -4,7 +4,7 @@
 
 ![Five-second capture of the GPU FFT ocean](assets/fft-ocean-demo.gif)
 
-The animation above is a five-second capture of the live WebGL simulation.
+The animation above is a five-second, 15 fps capture of the live WebGL simulation, shown from a corner-facing camera angle.
 
 ## Reports and reference
 
