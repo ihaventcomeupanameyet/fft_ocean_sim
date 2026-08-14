@@ -8,7 +8,7 @@ export default function App() {
     <main className="app-shell">
       <Leva hidden />
       <Canvas
-        camera={{ position: [0, 160, 175], fov: 48, near: 0.1, far: 5000 }}
+        camera={{ position: [0, 100, 175], fov: 48, near: 0.1, far: 5000 }}
         dpr={[1, 1.75]}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
         onCreated={({ gl }) => {

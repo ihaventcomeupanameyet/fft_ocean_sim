@@ -1,33 +1,34 @@
-uniform sampler2D uHeightSlopeX0;
-uniform sampler2D uSlopeZDisplacementX0;
-uniform sampler2D uDisplacementZ0;
-uniform sampler2D uHeightSlopeX1;
-uniform sampler2D uSlopeZDisplacementX1;
-uniform sampler2D uDisplacementZ1;
-uniform sampler2D uHeightSlopeX2;
-uniform sampler2D uSlopeZDisplacementX2;
-uniform sampler2D uDisplacementZ2;
-uniform sampler2D uHeightSlopeX3;
-uniform sampler2D uSlopeZDisplacementX3;
-uniform sampler2D uDisplacementZ3;
+uniform sampler2D uDisplacementAtlas;
+uniform sampler2D uDerivativeAtlas;
 uniform vec4 uPatchLengths;
+uniform float uOceanSize;
 uniform vec4 uVerticalWeights;
 uniform vec4 uChoppiness;
+uniform float uNormalStrength;
 
 varying float vOceanHeight;
 varying float vOceanSlope;
 varying vec3 vOceanWorldPosition;
+varying vec3 vOceanWorldNormal;
+varying vec2 vOceanUv;
 
-void sampleCascade(sampler2D hs, sampler2D sd, sampler2D dz, vec2 p,
-  float patchLength, float heightWeight, float chop,
-  inout float height, inout vec2 slope, inout vec2 displacement) {
+vec2 atlasUv(vec2 uv, float layer) {
+  vec2 quadrant = vec2(mod(layer, 2.0), floor(layer * 0.5));
+  vec2 wrapped = fract(uv);
+  return (quadrant + mix(vec2(0.00098), vec2(0.99902), wrapped)) * 0.5;
+}
+
+void sampleCascade(vec2 p, float patchLength, float layer, float heightWeight, float chop,
+  inout float height, inout vec2 slope, inout vec2 displacement,
+  out vec2 cascadeSlope) {
   vec2 oceanUv = p / patchLength + 0.5;
-  vec4 heightSlopeX = texture2D(hs, oceanUv);
-  vec4 slopeZDisplacementX = texture2D(sd, oceanUv);
-  vec4 displacementZ = texture2D(dz, oceanUv);
-  height += heightSlopeX.r * heightWeight;
-  slope += vec2(heightSlopeX.b, slopeZDisplacementX.r) * heightWeight;
-  displacement += vec2(slopeZDisplacementX.b, displacementZ.r) * chop;
+  vec2 packedUv = atlasUv(oceanUv, layer);
+  vec4 packedDisplacement = texture2D(uDisplacementAtlas, packedUv);
+  vec4 packedDerivatives = texture2D(uDerivativeAtlas, packedUv);
+  height += packedDisplacement.b * heightWeight;
+  cascadeSlope = packedDerivatives.rg * heightWeight;
+  slope += cascadeSlope;
+  displacement += packedDisplacement.rg * chop * heightWeight;
 }
 
 void main() {
@@ -35,15 +36,27 @@ void main() {
   float height = 0.0;
   vec2 slope = vec2(0.0);
   vec2 displacement = vec2(0.0);
-  sampleCascade(uHeightSlopeX0,uSlopeZDisplacementX0,uDisplacementZ0,p,uPatchLengths.x,uVerticalWeights.x,uChoppiness.x,height,slope,displacement);
-  sampleCascade(uHeightSlopeX1,uSlopeZDisplacementX1,uDisplacementZ1,p,uPatchLengths.y,uVerticalWeights.y,uChoppiness.y,height,slope,displacement);
-  sampleCascade(uHeightSlopeX2,uSlopeZDisplacementX2,uDisplacementZ2,p,uPatchLengths.z,uVerticalWeights.z,uChoppiness.z,height,slope,displacement);
-  sampleCascade(uHeightSlopeX3,uSlopeZDisplacementX3,uDisplacementZ3,p,uPatchLengths.w,uVerticalWeights.w,uChoppiness.w,height,slope,displacement);
+  vec2 slope0, slope1, slope2, slope3;
+  sampleCascade(p,uPatchLengths.x,0.0,uVerticalWeights.x,uChoppiness.x,height,slope,displacement,slope0);
+  sampleCascade(p,uPatchLengths.y,1.0,uVerticalWeights.y,uChoppiness.y,height,slope,displacement,slope1);
+  sampleCascade(p,uPatchLengths.z,2.0,uVerticalWeights.z,uChoppiness.z,height,slope,displacement,slope2);
+  sampleCascade(p,uPatchLengths.w,3.0,uVerticalWeights.w,uChoppiness.w,height,slope,displacement,slope3);
+
+  float inverseDistanceMask = clamp(pow(length(p / 500.0 * 3.0), 3.0), 0.0, 1.0);
+  // Reuse the packed cross-derivative channel as a slow variation source. The
+  // 400 m first cascade now varies only once over the complete ocean surface.
+  float normalVariation = abs(texture2D(uDisplacementAtlas,
+    atlasUv(p / 500.0 * 2.0 + 0.5, 0.0)).a);
+  normalVariation = clamp(normalVariation * inverseDistanceMask * 4.0, 0.0, 1.0);
+  slope = mix(slope, slope2 + slope3, normalVariation) * uNormalStrength;
 
   vec3 displaced = vec3(p + displacement, height);
   csm_Position = displaced;
-  csm_Normal = normalize(vec3(-slope.x, -slope.y, 1.0));
+  vec3 oceanNormal = normalize(vec3(-slope.x, -slope.y, 1.0));
+  csm_Normal = oceanNormal;
   vOceanHeight = height;
   vOceanSlope = length(slope);
   vOceanWorldPosition = (modelMatrix * vec4(displaced, 1.0)).xyz;
+  vOceanWorldNormal = normalize(mat3(modelMatrix) * oceanNormal);
+  vOceanUv = p / uOceanSize + 0.5;
 }

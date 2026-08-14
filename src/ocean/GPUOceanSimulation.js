@@ -1,8 +1,33 @@
 import * as THREE from 'three'
 import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js'
 import { createGaussian } from './fft.js'
+import { MAJOR_WAVE_DIRECTION } from './oceanConfig.js'
 
 const GRAVITY = 9.81
+
+function finiteDepthOmega(k, waterDepth) {
+  return Math.sqrt(GRAVITY * k * Math.tanh(k * waterDepth))
+}
+
+function finiteDepthFrequencyDerivative(k, omega, waterDepth) {
+  const kh = k * waterDepth
+  const tanhKh = Math.tanh(kh)
+  const sechSquared = 1 - tanhKh * tanhKh
+  return GRAVITY * (tanhKh + kh * sechSquared) / (2 * omega)
+}
+
+// Approximation to the Kitaigorodskii finite-depth factor used by TMA.
+// It approaches one in deep water and suppresses frequencies that cannot be
+// supported at the selected depth.
+function tmaDepthResponse(omega, waterDepth) {
+  const normalizedFrequency = omega * Math.sqrt(waterDepth / GRAVITY)
+  if (normalizedFrequency <= 1) return 0.5 * normalizedFrequency * normalizedFrequency
+  if (normalizedFrequency < 2) {
+    const distanceFromDeepWater = 2 - normalizedFrequency
+    return 1 - 0.5 * distanceFromDeepWater * distanceFromDeepWater
+  }
+  return 1
+}
 
 function alphaBetaSpectrum(a, b, omega, peakOmega) {
   return a * GRAVITY * GRAVITY / Math.pow(omega, 5)
@@ -10,7 +35,10 @@ function alphaBetaSpectrum(a, b, omega, peakOmega) {
 }
 
 function jonswapSpectrum(omega, windSpeed, fetchKm, peakEnhancement) {
-  const fetchMeters = fetchKm * 1000
+  return jonswapSpectrumMeters(omega, windSpeed, fetchKm * 1000, peakEnhancement)
+}
+
+function jonswapSpectrumMeters(omega, windSpeed, fetchMeters, peakEnhancement) {
   const alpha = 0.076 * Math.pow(windSpeed*windSpeed / (fetchMeters*GRAVITY), 0.22)
   const peakOmega = 22 * Math.pow(GRAVITY*GRAVITY / (windSpeed*fetchMeters), 1/3)
   const sigma = omega <= peakOmega ? 0.07 : 0.09
@@ -41,7 +69,8 @@ function spreadNormalization(s) {
 function directionSpectrum(relativeAngle, omega, peakOmega, spreadBlend, swell) {
   const s = spreadPower(omega, peakOmega)
     + 16*Math.tanh(Math.min(omega/peakOmega, 20))*swell*swell
-  const broad = 2/Math.PI * Math.cos(relativeAngle) ** 2
+  // Preserve the reference shader's artistic (non-normalized) broad lobe.
+  const broad = 2*Math.PI * Math.cos(relativeAngle) ** 2
   const focused = spreadNormalization(s)
     * Math.pow(Math.abs(Math.cos(0.5*relativeAngle)), 2*s)
   return broad*(1-spreadBlend) + focused*spreadBlend
@@ -51,6 +80,9 @@ const evolutionShader = /* glsl */ `
 uniform sampler2D uH0;
 uniform float uTime;
 uniform float uPatchLength;
+uniform float uDisplayLength;
+uniform float uWaterDepth;
+uniform float uRepeatTime;
 vec2 complexMul(vec2 a, vec2 b) { return vec2(a.x*b.x-a.y*b.y, a.x*b.y+a.y*b.x); }
 void main() {
   vec2 cell = floor(gl_FragCoord.xy);
@@ -65,8 +97,15 @@ void main() {
     gl_FragColor = vec4(0.0);
     return;
   }
-  float omega = sqrt(9.81 * k);
-  float phase = omega * uTime;
+  // Match the Unity reference: the initial spectrum uses finite depth/TMA,
+  // while animation uses repeatable, quantized deep-water frequencies.
+  // Convert spectral to displayed spatial frequency. In the physical cascade
+  // setup both lengths are equal; retaining the ratio keeps the class safe if
+  // a deliberately rescaled display domain is used later.
+  float displayedK = k * uPatchLength / uDisplayLength;
+  float frequencyStep = 6.28318530718 / uRepeatTime;
+  float omega = floor(sqrt(9.81 * displayedK) / frequencyStep) * frequencyStep;
+  float phase = mod(omega * uTime, 6.28318530718);
   vec2 h = complexMul(h0, vec2(cos(phase), sin(phase)))
          + complexMul(h0MinusConjugate, vec2(cos(phase), -sin(phase)));
   gl_FragColor = vec4(h, 0.0, 1.0);
@@ -75,6 +114,7 @@ void main() {
 
 const deriveShader = /* glsl */ `
 uniform sampler2D uSpectrum;
+uniform sampler2D uH0;
 uniform float uPatchLength;
 uniform int uMode;
 float bitReverse(float value) {
@@ -87,7 +127,6 @@ float bitReverse(float value) {
   return reversed;
 }
 vec2 mulI(float q, vec2 z) { return vec2(-q*z.y, q*z.x); }
-vec2 mulMinusI(float q, vec2 z) { return vec2(q*z.y, -q*z.x); }
 void main() {
   vec2 outputCell = floor(gl_FragCoord.xy);
   vec2 sourceCell = vec2(bitReverse(outputCell.x), bitReverse(outputCell.y));
@@ -96,13 +135,25 @@ void main() {
   vec2 kVec = 6.28318530718 * centered / uPatchLength;
   float k = length(kVec);
   if (uMode == 0) {
-    gl_FragColor = vec4(h, mulI(kVec.x, h));
+    vec2 ih = vec2(-h.y, h.x);
+    vec2 dx = k > 0.0 ? ih * kVec.x / k : vec2(0.0);
+    vec2 dz = k > 0.0 ? ih * kVec.y / k : vec2(0.0);
+    vec2 dxz = k > 0.0 ? -h * kVec.x * kVec.y / k : vec2(0.0);
+    // Pack two real spatial fields into each complex channel, exactly as the
+    // reference's htimeDisplacementX/htimeDisplacementZ pair.
+    gl_FragColor = vec4(dx.x - dz.y, dx.y + dz.x,
+                        h.x - dxz.y, h.y + dxz.x);
   } else if (uMode == 1) {
-    vec2 dx = k > 0.0 ? mulMinusI(kVec.x/k, h) : vec2(0.0);
-    gl_FragColor = vec4(mulI(kVec.y, h), dx);
+    vec2 ih = vec2(-h.y, h.x);
+    vec2 slopeX = ih * kVec.x;
+    vec2 slopeZ = ih * kVec.y;
+    vec2 dxx = k > 0.0 ? -h * kVec.x * kVec.x / k : vec2(0.0);
+    vec2 dzz = k > 0.0 ? -h * kVec.y * kVec.y / k : vec2(0.0);
+    gl_FragColor = vec4(slopeX.x - slopeZ.y, slopeX.y + slopeZ.x,
+                        dxx.x - dzz.y, dxx.y + dzz.x);
   } else {
-    vec2 dz = k > 0.0 ? mulMinusI(kVec.y/k, h) : vec2(0.0);
-    gl_FragColor = vec4(dz, vec2(0.0));
+    float initialReal = texture2D(uH0, (sourceCell + 0.5) / resolution).r;
+    gl_FragColor = vec4(initialReal, 0.0, 0.0, 0.0);
   }
 }
 `
@@ -137,7 +188,9 @@ export class GPUOceanSimulation {
   constructor(renderer, {
     size = 64,
     patchLength = 128,
+    displayLength = patchLength,
     windSpeed = 18,
+    waterDepth = 10,
     fetchKm = 100,
     peakEnhancement = 6,
     spreadBlend = 0.85,
@@ -146,7 +199,9 @@ export class GPUOceanSimulation {
     minWavelength = 0,
     maxWavelength = Infinity,
     spectrumScale = 1,
+    spectra = null,
     seed = 1701,
+    createVariation = false,
   } = {}) {
     this.size = size
     this.patchLength = patchLength
@@ -155,6 +210,7 @@ export class GPUOceanSimulation {
     this.gpuCompute.setDataType(THREE.FloatType)
     this.h0Texture = this.createInitialSpectrum({
       windSpeed,
+      waterDepth,
       fetchKm,
       peakEnhancement,
       spreadBlend,
@@ -163,6 +219,7 @@ export class GPUOceanSimulation {
       minWavelength,
       maxWavelength,
       spectrumScale,
+      spectra,
       seed,
     })
     const initialSpectrum = this.gpuCompute.createTexture()
@@ -171,12 +228,16 @@ export class GPUOceanSimulation {
       uH0: { value: this.h0Texture },
       uTime: { value: 0 },
       uPatchLength: { value: patchLength },
+      uDisplayLength: { value: displayLength },
+      uWaterDepth: { value: waterDepth },
+      uRepeatTime: { value: 200 },
     })
     const error = this.gpuCompute.init()
     if (error) throw new Error(`FFT ocean GPU initialization failed: ${error}`)
 
     this.deriveMaterial = this.gpuCompute.createShaderMaterial(deriveShader, {
-      uSpectrum: { value: null }, uPatchLength: { value: patchLength }, uMode: { value: 0 },
+      uSpectrum: { value: null }, uH0: { value: this.h0Texture },
+      uPatchLength: { value: patchLength }, uMode: { value: 0 },
     })
     this.deriveMaterial.defines.FFT_LOG_SIZE = this.logSize
     this.butterflyMaterial = this.gpuCompute.createShaderMaterial(butterflyShader, {
@@ -185,8 +246,11 @@ export class GPUOceanSimulation {
     // Butterfly inputs must remain nearest-filtered. Completed spatial fields
     // are copied into separate linear targets for smooth mesh displacement and
     // normals without corrupting the FFT computation itself.
-    this.packs = Array.from({ length: 3 }, () => [this.makeTarget(), this.makeTarget()])
-    this.finalTargets = Array.from({ length: 3 }, () => this.makeTarget(THREE.LinearFilter))
+    // All three derived fields are transformed sequentially and copied into
+    // final targets, so one ping-pong pair can be reused for every field.
+    this.packs = [this.makeTarget(), this.makeTarget()]
+    this.fieldCount = createVariation ? 3 : 2
+    this.finalTargets = Array.from({ length: this.fieldCount }, () => this.makeTarget(THREE.LinearFilter))
     this.outputTextures = this.finalTargets.map((target) => target.texture)
   }
 
@@ -197,6 +261,7 @@ export class GPUOceanSimulation {
 
   createInitialSpectrum({
     windSpeed,
+    waterDepth,
     fetchKm,
     peakEnhancement,
     spreadBlend,
@@ -205,12 +270,13 @@ export class GPUOceanSimulation {
     minWavelength,
     maxWavelength,
     spectrumScale,
+    spectra,
     seed,
   }) {
     const texture = this.gpuCompute.createTexture()
     const data = texture.image.data
     const gaussian = createGaussian(seed)
-    const wind = new THREE.Vector2(0.94, 0.342).normalize()
+    const wind = new THREE.Vector2(...MAJOR_WAVE_DIRECTION).normalize()
     const windAngle = Math.atan2(wind.y, wind.x)
     const deltaK = Math.PI * 2 / this.patchLength
     const spectralBinArea = deltaK * deltaK
@@ -226,20 +292,49 @@ export class GPUOceanSimulation {
       const k = Math.sqrt(k2)
       const wavelength = Math.PI * 2 / k
       if (wavelength < minWavelength || wavelength > maxWavelength) continue
-      const omega = Math.sqrt(GRAVITY*k)
-      const { density: frequencyDensity, peakOmega } = jonswapSpectrum(
-        omega, windSpeed, fetchKm, peakEnhancement,
-      )
-      const frequencyDerivative = GRAVITY/(2*omega)
-      const relativeAngle = Math.atan2(kz, kx) - windAngle
-      const directional = directionSpectrum(
-        relativeAngle, omega, peakOmega, spreadBlend, swell,
-      )
-      const spectrumDensity = 2*frequencyDensity*Math.abs(frequencyDerivative)/k
-        * directional
-        * Math.exp(-k2*shortWaveDampingLength*shortWaveDampingLength)
+      const omega = finiteDepthOmega(k, waterDepth)
+      const frequencyDerivative = finiteDepthFrequencyDerivative(k, omega, waterDepth)
+      const depthResponse = tmaDepthResponse(omega, waterDepth)
+      let directionalFrequencyDensity = 0
+      if (spectra?.length) {
+        for (const settings of spectra) {
+          if (settings.scale <= 0) continue
+          const { density, peakOmega } = jonswapSpectrumMeters(
+            omega, settings.windSpeed, settings.fetchMeters, settings.peakEnhancement,
+          )
+          const angle = THREE.MathUtils.degToRad(settings.windDirection)
+          const directional = directionSpectrum(
+            Math.atan2(kz, kx) - angle,
+            omega,
+            peakOmega,
+            settings.spreadBlend,
+            settings.swell,
+          )
+          const fade = Math.exp(
+            -settings.shortWavesFade * settings.shortWavesFade * k2 / 10000,
+          )
+          directionalFrequencyDensity += settings.scale * density * directional * fade
+        }
+      } else {
+        const { density, peakOmega } = jonswapSpectrum(
+          omega, windSpeed, fetchKm, peakEnhancement,
+        )
+        const directional = directionSpectrum(
+          Math.atan2(kz, kx) - windAngle,
+          omega,
+          peakOmega,
+          spreadBlend,
+          swell,
+        )
+        directionalFrequencyDensity = density * directional
+          * Math.exp(-k2*shortWaveDampingLength*shortWaveDampingLength)
+      }
+      const spectrumDensity = 2*directionalFrequencyDensity*depthResponse
+        * Math.abs(frequencyDerivative)/k
       const varianceInBin = spectrumDensity * spectralBinArea * spectrumScale
-      const scale = Math.sqrt(Math.max(varianceInBin, 0)*0.5)
+      // Match the reference implementation's stronger complex coefficient.
+      // Its two independent unit Gaussians use the full per-bin variance.
+      const scale = Math.sqrt(Math.max(varianceInBin, 0))
       data[offset] = gaussian()*scale
       data[offset + 1] = gaussian()*scale
     }
@@ -251,8 +346,8 @@ export class GPUOceanSimulation {
     this.spectrumVariable.material.uniforms.uTime.value = time
     this.gpuCompute.compute()
     const spectrum = this.gpuCompute.getCurrentRenderTarget(this.spectrumVariable).texture
-    for (let mode = 0; mode < 3; mode += 1) {
-      const targets = this.packs[mode]
+    for (let mode = 0; mode < this.fieldCount; mode += 1) {
+      const targets = this.packs
       this.deriveMaterial.uniforms.uSpectrum.value = spectrum
       this.deriveMaterial.uniforms.uMode.value = mode
       this.gpuCompute.doRenderTarget(this.deriveMaterial, targets[0])
@@ -298,7 +393,7 @@ export class GPUOceanSimulation {
     this.h0Texture.dispose()
     this.deriveMaterial.dispose()
     this.butterflyMaterial.dispose()
-    for (const targets of this.packs) for (const target of targets) target.dispose()
+    for (const target of this.packs) target.dispose()
     for (const target of this.finalTargets) target.dispose()
     this.gpuCompute.dispose()
   }
