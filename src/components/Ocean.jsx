@@ -53,7 +53,7 @@ export function Ocean() {
   const controls = useControls({
     Simulation: folder({
       waterDepth: { value: 10, min: 5, max: 1000, step: 5, label: 'Water depth (m)' },
-      timeScale: { value: 0.7, min: 0, max: 3, step: 0.05, label: 'Motion speed' },
+      timeScale: { value: 1.5, min: 0, max: 3, step: 0.05, label: 'Motion speed' },
     }),
     'Cascade energy': folder({
       swellEnergy: { value: 1, min: 0, max: 1.5, step: 0.01 },
@@ -155,7 +155,7 @@ export function Ocean() {
       ior={1.333}
       transmission={0}
       envMapIntensity={controls.environmentIntensity}
-      side={THREE.DoubleSide}
+      side={THREE.FrontSide}
     />
   )
 

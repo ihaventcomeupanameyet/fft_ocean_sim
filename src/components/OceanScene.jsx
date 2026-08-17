@@ -5,14 +5,19 @@ import * as THREE from 'three'
 import { Ocean } from './Ocean.jsx'
 import { MAJOR_WAVE_DIRECTION, SUN_POLAR_ANGLE_DEGREES } from '../ocean/oceanConfig.js'
 
-const CAMERA_HEIGHT = 30
+const CAMERA_HEIGHT = 35
+const CAMERA_SHORE_OFFSET = -150
+const CAMERA_TARGET_HEIGHT = 15
+const CAMERA_LOOK_DISTANCE = 120
 
 function CameraRig() {
   const { camera } = useThree()
   useLayoutEffect(() => {
-    const wave = new THREE.Vector2(...MAJOR_WAVE_DIRECTION).normalize()
-    camera.position.set(-wave.x * 175, CAMERA_HEIGHT, -wave.y * 175)
-    camera.lookAt(0, CAMERA_HEIGHT, 0)
+    // Look perpendicularly across the longest water distance. The elevated,
+    // downward-pitched view reveals crest shapes while the narrow 30° FOV
+    // keeps the plane's side corners outside a normal widescreen frustum.
+    camera.position.set(0, CAMERA_HEIGHT, CAMERA_SHORE_OFFSET)
+    camera.lookAt(0, CAMERA_TARGET_HEIGHT, CAMERA_LOOK_DISTANCE)
     camera.updateProjectionMatrix()
   }, [camera])
   return null
@@ -50,7 +55,7 @@ export function OceanScene() {
       <CameraRig />
       <OrbitControls
         makeDefault
-        target={[0, CAMERA_HEIGHT, 0]}
+        target={[0, CAMERA_TARGET_HEIGHT, CAMERA_LOOK_DISTANCE]}
         minDistance={8}
         maxDistance={1400}
         enableRotate={false}

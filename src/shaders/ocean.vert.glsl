@@ -25,10 +25,26 @@ void sampleCascade(vec2 p, float patchLength, float layer, float heightWeight, f
   vec2 packedUv = atlasUv(oceanUv, layer);
   vec4 packedDisplacement = texture2D(uDisplacementAtlas, packedUv);
   vec4 packedDerivatives = texture2D(uDerivativeAtlas, packedUv);
+  float dxx = packedDerivatives.b;
+  float dzz = packedDerivatives.a;
+  float dxz = packedDisplacement.a;
   height += packedDisplacement.b * heightWeight;
-  cascadeSlope = packedDerivatives.rg * heightWeight;
+  // Match the reference's displaced-surface slope correction. Raw height
+  // slopes over-rotate normals at highly compressed crests.
+  cascadeSlope = packedDerivatives.rg
+    / (vec2(1.0) + abs(vec2(dxx, dzz) * chop)) * heightWeight;
   slope += cascadeSlope;
-  displacement += packedDisplacement.rg * chop * heightWeight;
+
+  // Choppy horizontal displacement becomes non-injective when its Jacobian
+  // crosses zero. That folds triangles over themselves and shows detached,
+  // differently lit sheets on a double-sided ocean. Smoothly reduce only the
+  // geometric chop near foldover; the foam simulation still sees the original
+  // compression and can mark the breaking crest.
+  float horizontalJacobian = (1.0 + chop * dxx) * (1.0 + chop * dzz)
+                           - chop * chop * dxz * dxz;
+  float foldGuard = smoothstep(0.0, 0.42, horizontalJacobian);
+  float safeChop = chop * foldGuard;
+  displacement += packedDisplacement.rg * safeChop * heightWeight;
 }
 
 void main() {
