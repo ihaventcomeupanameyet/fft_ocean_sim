@@ -131,4 +131,4 @@ CPU--GPU FFT comparison, GPU timing, or long-running memory tests.
 
 - [English project report](./report.pdf)
 - [中文项目报告](./report_cn.pdf)
-- [Jerry Tessendorf, *Simulating Ocean Water*](./coursenotes2004.pdf)
+- [Jerry Tessendorf, *Simulating Ocean Water*](./tessendorf-ocean-course-notes-2004.pdf)
